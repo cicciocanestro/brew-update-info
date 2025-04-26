@@ -7,48 +7,53 @@ YELLOW='\033[0;33m'
 BLUE='\033[0;36m'
 NC='\033[0m' # No Color
 
-# File temporaneo per memorizzare lo stato precedente
-PREV_FORMULAS_FILE="/tmp/brew_formulas_previous.txt"
-PREV_CASKS_FILE="/tmp/brew_casks_previous.txt"
+# File temporaneo per memorizzare l'output di brew tap-info prima dell'aggiornamento
+PREV_TAP_INFO_FILE="/tmp/brew_tap_info_previous.txt"
+BREW_UPDATE_OUTPUT_FILE="/tmp/brew_update_output.txt"
 
-# Funzione per mostrare informazioni sul pacchetto
-show_package_info() {
+# Funzione per mostrare l'URL del pacchetto
+show_package_url() {
     local package_name=$1
     local package_type=$2
     
     echo -e "\n${YELLOW}===========================================================${NC}"
-    echo -e "${GREEN}Informazioni per ${package_type}: ${BLUE}$package_name${NC}"
+    echo -e "${GREEN}$package_type: ${BLUE}$package_name${NC}"
+    
+    # Estrai solo l'URL dal brew info
+    url=$(brew info "$package_name" | grep -E "https?://" | head -1 | awk '{print $1}')
+    
+    if [ -n "$url" ]; then
+        echo -e "${GREEN}URL: ${BLUE}$url${NC}"
+    else
+        echo -e "${RED}Nessun URL trovato per questo pacchetto${NC}"
+    fi
+    
     echo -e "${YELLOW}===========================================================${NC}"
-    
-    # Mostra informazioni dettagliate sul pacchetto
-    brew info "$package_name"
-    
-    echo -e "\n${YELLOW}===========================================================${NC}"
     echo ""
 }
 
-# Salva lo stato attuale prima dell'aggiornamento
-echo -e "${BLUE}Salvataggio stato attuale dei pacchetti Homebrew...${NC}"
-brew list --formula > "$PREV_FORMULAS_FILE"
-brew list --cask > "$PREV_CASKS_FILE"
+# Funzione per estrarre i nuovi pacchetti dall'output di brew update
+extract_new_packages() {
+    # Cerca righe che contengono "==> New Formulae", "==> New Casks" o simili nell'output
+    grep -A 100 "==> New" "$BREW_UPDATE_OUTPUT_FILE" | grep -v "==> " | grep -v "^$" | sort | uniq
+}
 
-# Esegui brew update
+# Esegui brew update e cattura l'output
 echo -e "${BLUE}Esecuzione di brew update...${NC}"
-brew update
+brew update 2>&1 | tee "$BREW_UPDATE_OUTPUT_FILE"
 
 # Ottieni l'elenco dei pacchetti da aggiornare
 echo -e "${BLUE}Controllo pacchetti da aggiornare...${NC}"
 outdated_packages=$(brew outdated --verbose)
 
-# Ottieni l'elenco dei pacchetti nuovi (confrontando con lo stato precedente)
-echo -e "${BLUE}Controllo pacchetti nuovi...${NC}"
-new_formulas=$(comm -13 "$PREV_FORMULAS_FILE" <(brew list --formula))
-new_casks=$(comm -13 "$PREV_CASKS_FILE" <(brew list --cask))
+# Estrai i nuovi pacchetti dall'output di brew update
+echo -e "${BLUE}Controllo pacchetti nuovi nel repository...${NC}"
+new_packages=$(extract_new_packages)
 
 # Verifica se ci sono pacchetti da aggiornare o nuovi
-if [ -z "$outdated_packages" ] && [ -z "$new_formulas" ] && [ -z "$new_casks" ]; then
-    echo -e "${GREEN}Nessun pacchetto da aggiornare e nessun pacchetto nuovo. Tutto è aggiornato.${NC}"
-    rm -f "$PREV_FORMULAS_FILE" "$PREV_CASKS_FILE"
+if [ -z "$outdated_packages" ] && [ -z "$new_packages" ]; then
+    echo -e "${GREEN}Nessun pacchetto da aggiornare e nessun pacchetto nuovo nel repository. Tutto è aggiornato.${NC}"
+    rm -f "$BREW_UPDATE_OUTPUT_FILE"
     exit 0
 fi
 
@@ -58,37 +63,26 @@ if [ -n "$outdated_packages" ]; then
     package_count=$(echo "$outdated_packages" | wc -l | tr -d ' ')
     echo -e "${YELLOW}Trovati $package_count pacchetti da aggiornare:${NC}"
 
-    # Per ogni pacchetto da aggiornare, mostra le informazioni
+    # Per ogni pacchetto da aggiornare, mostra l'URL
     while IFS= read -r line; do
         # Estrai il nome del pacchetto (prima colonna)
         package_name=$(echo "$line" | awk '{print $1}')
         echo -e "${YELLOW}Versioni: $line${NC}"
-        show_package_info "$package_name" "pacchetto da aggiornare"
+        show_package_url "$package_name" "Pacchetto da aggiornare"
     done <<< "$outdated_packages"
 fi
 
-# Mostra informazioni sui pacchetti nuovi (formule)
-if [ -n "$new_formulas" ]; then
-    formula_count=$(echo "$new_formulas" | wc -l | tr -d ' ')
-    echo -e "${YELLOW}Trovate $formula_count nuove formule:${NC}"
+# Mostra URL dei pacchetti nuovi
+if [ -n "$new_packages" ]; then
+    # Conta i nuovi pacchetti
+    package_count=$(echo "$new_packages" | wc -l | tr -d ' ')
+    echo -e "${YELLOW}Trovati $package_count nuovi pacchetti nel repository Homebrew:${NC}"
 
-    while IFS= read -r formula; do
-        if [ -n "$formula" ]; then
-            show_package_info "$formula" "nuova formula"
+    while IFS= read -r package; do
+        if [ -n "$package" ]; then
+            show_package_url "$package" "Nuovo pacchetto"
         fi
-    done <<< "$new_formulas"
-fi
-
-# Mostra informazioni sui pacchetti nuovi (cask)
-if [ -n "$new_casks" ]; then
-    cask_count=$(echo "$new_casks" | wc -l | tr -d ' ')
-    echo -e "${YELLOW}Trovati $cask_count nuovi cask:${NC}"
-
-    while IFS= read -r cask; do
-        if [ -n "$cask" ]; then
-            show_package_info "$cask" "nuovo cask"
-        fi
-    done <<< "$new_casks"
+    done <<< "$new_packages"
 fi
 
 # Chiedi all'utente se vuole procedere con l'aggiornamento
@@ -103,5 +97,4 @@ else
 fi
 
 # Pulizia file temporanei
-rm -f "$PREV_FORMULAS_FILE" "$PREV_CASKS_FILE"
-
+rm -f "$BREW_UPDATE_OUTPUT_FILE"
